@@ -1,0 +1,11 @@
+.build_tpl:
+  before_script:
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_JOB_TOKEN} ${CI_REGISTRY}
+  script:
+    - cat SC.CloudApi/SC.CloudApi.WebService/${APP_CONFIG} > SC.CloudApi/SC.CloudApi.WebService/appsettings.json
+    - cd ${PROJECT_NAME}
+    - docker build --no-cache --pull -t ${DOCKER_URL}:${CI_PIPELINE_ID} .
+    - docker push ${DOCKER_URL}:${CI_PIPELINE_ID}
+    - docker rmi ${DOCKER_URL}:${CI_PIPELINE_ID} || true
+  tags:
+  - runner-docker
