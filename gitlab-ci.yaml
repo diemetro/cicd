@@ -1,0 +1,110 @@
+#deploy to remote host
+stages:  
+  - build
+  - upload
+  - deploy
+
+include: 
+  - local: '/templates/build_tpl.yml'
+  - local: '/templates/deploy_tpl.yml'
+
+main:build:
+  stage: build
+  image: docker:dind
+  variables:
+    PROJECT_NAME: SC.CloudApi
+    PROJECT_DOMAIN: test-cloudapi.it.scancity.ru
+    DOCKER_URL: ${CI_REGISTRY_IMAGE}/${CI_COMMIT_REF_NAME}
+    ASPNETCORE_ENVIRONMENT: Testing
+    NLOG_CONFIG: nlog.testing.config
+  extends:
+    - .build_tpl
+  only:
+    refs:
+      - main
+    changes:
+      - "SC.CloudApi/**/*"
+
+main:deploy:
+  stage: deploy
+  image: docker:dind
+  variables:
+    SSH_URL: ${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}
+    SSH_PRIVATE_KEY: ${DEPLOY_PRIVATE_KEY}
+    SSH_PORT: ${DEPLOY_SSH_PORT}
+    DEPLOY_DIR: /tmp/${CI_COMMIT_SHORT_SHA}/
+    PROJECT_NAME: CloudApi
+    PROJECT_DOMAIN: test-cloudapi.it.scancity.ru
+  extends:
+    - .deploy_tpl
+  only:
+    refs:
+      - main
+    changes:
+      - "SC.CloudApi/**/*"
+
+deploy:
+  stage: upload
+  variables:
+    SSH_URL: ${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}
+    SSH_PRIVATE_KEY: ${DEPLOY_PRIVATE_KEY}
+    SSH_PORT: ${DEPLOY_SSH_PORT}
+    DEPLOY_DIR: /tmp/test
+  before_script:
+    - apk add --no-cache sshpass openssh-client rsync
+  script:
+    - echo ${SSH_URL}
+    - eval $(ssh-agent -s)
+    - echo "${SSH_PRIVATE_KEY}" | tr -d '\r' | base64 -d | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+    - ssh -p ${SSH_PORT} -o stricthostkeychecking=no -o PubkeyAuthentication=yes ${SSH_URL} "mkdir -p ${DEPLOY_DIR}/"
+    - rsync -av ./ --exclude='*.md' --exclude='*.yml' --exclude='.gitignore' --exclude='.sh' --exclude='.git' ${SSH_URL}:${DEPLOY_DIR}/
+  when: manual
+  only:
+  - main
+  tags:
+  - runner-docker
+
+main:deploy2:      # This job runs in the deploy stage.
+  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
+  image: docker:dind
+  variables:
+    SSH_URL: ${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}
+    SSH_PRIVATE_KEY: ${DEPLOY_PRIVATE_KEY}
+    SSH_PORT: ${DEPLOY_SSH_PORT}
+    DEPLOY_DIR: /tmp/${CI_COMMIT_SHORT_SHA}/
+    PROJECT_NAME: SigningEncryption
+    PROJECT_DOMAIN: test-sign.it.scancity.ru
+  environment: production
+  before_script:
+    - apk add --no-cache sshpass openssh-client
+  script:
+    - echo ${SSH_URL}
+    - eval $(ssh-agent -s)
+    - echo "${SSH_PRIVATE_KEY}" | tr -d '\r' | base64 -d | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+    - ssh -p ${SSH_PORT} -o stricthostkeychecking=no ${SSH_URL} "mkdir -p ${DEPLOY_DIR}/"
+    - scp -P ${SSH_PORT} -r ./docker-compose.tpl ${SSH_URL}:${DEPLOY_DIR}/
+    - |
+       ssh -p ${SSH_PORT} -o StrictHostKeyChecking=no -o PubkeyAuthentication=yes ${SSH_URL} \
+       DEPLOY_DIR=${DEPLOY_DIR} \
+       CI_REGISTRY_USER=${CI_REGISTRY_USER} \
+       CI_JOB_TOKEN=${CI_JOB_TOKEN} \
+       CI_REGISTRY=${CI_REGISTRY} \
+       CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE} \
+       CI_PIPELINE_ID=${CI_PIPELINE_ID} \
+       CI_COMMIT_REF_NAME=${CI_COMMIT_REF_NAME} \
+       PROJECT_DOMAIN=${PROJECT_DOMAIN} \
+       PROJECT_NAME=${PROJECT_NAME} \
+       'bash -s' < ./deploy.sh
+  tags:
+  - runner-docker
+  only:
+    refs:
+      - main
+    changes:
+      - "SC.SigningEncryption/**/*"
